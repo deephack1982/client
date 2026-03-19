@@ -8,7 +8,8 @@
   makeDesktopItem,
   pnpmConfigHook,
   fetchPnpmDeps,
-}: let
+}:
+let
   pname = "defguard-client";
   # Automatically read version from Cargo.toml
   version = (fromTOML (builtins.readFile ../src-tauri/Cargo.toml)).workspace.package.version;
@@ -19,7 +20,10 @@
     icon = pname;
     desktopName = "Defguard";
     genericName = "Defguard VPN Client";
-    categories = ["Network" "Security"];
+    categories = [
+      "Network"
+      "Security"
+    ];
   };
 
   pnpm = pkgs.pnpm_10;
@@ -46,7 +50,6 @@
     desktop-file-utils
     iproute2
     lsb-release
-    openresolv
   ];
 
   nativeBuildInputs = [
@@ -67,97 +70,105 @@
     pkgs.wrapGAppsHook3
   ];
 in
-  stdenv.mkDerivation (finalAttrs: rec {
-    inherit pname version buildInputs nativeBuildInputs;
+stdenv.mkDerivation (finalAttrs: rec {
+  inherit
+    pname
+    version
+    buildInputs
+    nativeBuildInputs
+    ;
 
-    src = ../.;
+  src = ../.;
 
-    # prefetch cargo dependencies
-    cargoRoot = "src-tauri";
-    buildAndTestSubdir = "src-tauri";
+  # prefetch cargo dependencies
+  cargoRoot = "src-tauri";
+  buildAndTestSubdir = "src-tauri";
 
-    cargoDeps = rustPlatform.importCargoLock {
-      lockFile = ../src-tauri/Cargo.lock;
-    };
+  cargoDeps = rustPlatform.importCargoLock {
+    lockFile = ../src-tauri/Cargo.lock;
+  };
 
-    # prefetch pnpm dependencies
-    pnpmDeps = fetchPnpmDeps {
-      inherit
-        (finalAttrs)
-        pname
-        version
-        src
-        ;
+  # prefetch pnpm dependencies
+  pnpmDeps = fetchPnpmDeps {
+    inherit (finalAttrs)
+      pname
+      version
+      src
+      ;
 
-      fetcherVersion = 2;
-      hash = "sha256-iOsSI/QjjPfVpMHIrr1lXQxSdiLQpGeSfSGe0g8dSqY=";
-    };
+    fetcherVersion = 2;
+    hash = "sha256-BtitYLrdXq2WcCfJtu7e7k7VVNgPISl7CP0fTAA5Dx0=";
+  };
 
-    buildPhase = ''
-      runHook preBuild
+  buildPhase = ''
+    runHook preBuild
 
-      pnpm tauri build --verbose
+    pnpm tauri build --verbose
 
-      runHook postBuild
-    '';
+    runHook postBuild
+  '';
 
-    installPhase = ''
-      runHook preInstall
+  installPhase = ''
+    runHook preInstall
 
-      mkdir -p $out/bin
+    mkdir -p $out/bin
 
-      # copy client binary
-      install -Dm755 src-tauri/target/release/${pname} $out/bin/${pname}
+    # copy client binary
+    install -Dm755 src-tauri/target/release/${pname} $out/bin/${pname}
 
-      # copy background service binary
-      install -Dm755 src-tauri/target/release/defguard-service $out/bin/defguard-service
+    # copy background service binary
+    install -Dm755 src-tauri/target/release/defguard-service $out/bin/defguard-service
 
-      # copy CLI binary
-      install -Dm755 src-tauri/target/release/dg $out/bin/dg
+    # copy CLI binary
+    install -Dm755 src-tauri/target/release/dg $out/bin/dg
 
-      # Copy resources directory (for tray icons, etc.)
-      mkdir -p $out/lib/${pname}
-      cp -r src-tauri/resources $out/lib/${pname}/
+    # Copy resources directory (for tray icons, etc.)
+    mkdir -p $out/lib/${pname}
+    cp -r src-tauri/resources $out/lib/${pname}/
 
-      # install desktop entry
-      mkdir -p $out/share/applications
-      cp ${desktopItem}/share/applications/* $out/share/applications/
+    # install desktop entry
+    mkdir -p $out/share/applications
+    cp ${desktopItem}/share/applications/* $out/share/applications/
 
-      # install icon files
-      mkdir -p $out/share/icons/hicolor/{32x32,128x128}/apps
-      install -Dm644 src-tauri/icons/32x32.png $out/share/icons/hicolor/32x32/apps/${pname}.png
-      install -Dm644 src-tauri/icons/128x128.png $out/share/icons/hicolor/128x128/apps/${pname}.png
+    # install icon files
+    mkdir -p $out/share/icons/hicolor/{32x32,128x128}/apps
+    install -Dm644 src-tauri/icons/32x32.png $out/share/icons/hicolor/32x32/apps/${pname}.png
+    install -Dm644 src-tauri/icons/128x128.png $out/share/icons/hicolor/128x128/apps/${pname}.png
 
-      runHook postInstall
-    '';
+    runHook postInstall
+  '';
 
-    # add extra args to wrapGAppsHook3 wrapper
-    preFixup = ''
-      gappsWrapperArgs+=(
-        --prefix PATH : ${
+  # add extra args to wrapGAppsHook3 wrapper
+  preFixup = ''
+    # defguard expects `resolvconf` to be a symlink to resolvectl (systemd),
+    # not the standalone openresolv binary
+    ln -s ${pkgs.systemd}/bin/resolvectl $out/bin/resolvconf
+
+    gappsWrapperArgs+=(
+      --prefix PATH : ${
         lib.makeBinPath [
           # `defguard-service` needs `ip` to manage WireGuard
           pkgs.iproute2
-          # `defguard-service` needs `resolvconf` to manage DNS
-          pkgs.openresolv
+          # `defguard-service` needs `resolvconf` (symlink to resolvectl) to manage DNS
+          pkgs.systemd
           # `defguard-client` needs `update-desktop-database` and `lsb_release`
           pkgs.desktop-file-utils
           pkgs.lsb-release
         ]
       }
-        --prefix LD_LIBRARY_PATH : ${
+      --prefix LD_LIBRARY_PATH : ${
         lib.makeLibraryPath [
           pkgs.libayatana-appindicator
         ]
       }
-      )
-    '';
+    )
+  '';
 
-    meta = with lib; {
-      description = "Defguard VPN Client";
-      homepage = "https://defguard.net";
-      # license = licenses.gpl3Only;
-      maintainers = with maintainers; [wojcik91];
-      platforms = platforms.linux;
-    };
-  })
+  meta = with lib; {
+    description = "Defguard VPN Client";
+    homepage = "https://defguard.net";
+    # license = licenses.gpl3Only;
+    maintainers = with maintainers; [ wojcik91 ];
+    platforms = platforms.linux;
+  };
+})
